@@ -60,6 +60,13 @@ async function ProjectDetail({ params }: Pick<PageProps<"/proyectos/[id]">, "par
 
   const sensorKey = auditResult ? readSensorKey(auditResult) : null;
   const usedPoints = series?.ndvi.filter((point) => sensorKey === null || point.sensor === sensorKey) ?? [];
+  const sentinelMonths = [
+    ...new Set(
+      (series?.ndvi ?? [])
+        .filter((point) => point.sensor === "s2" && point.ndvi_mean !== null)
+        .map((point) => point.period.slice(0, 7)),
+    ),
+  ].sort();
   const averageValid = usedPoints.length
     ? usedPoints.reduce((sum, point) => sum + point.valid_fraction, 0) / usedPoints.length
     : null;
@@ -134,9 +141,18 @@ async function ProjectDetail({ params }: Pick<PageProps<"/proyectos/[id]">, "par
         <ProjectProfileCard project={project} profile={profile} />
         {geometry ? (
           <div>
-            <LocationMap geometry={geometry} category={auditResult?.category ?? null} name={project.name} />
+            <LocationMap
+              geometry={geometry}
+              category={auditResult?.category ?? null}
+              name={project.name}
+              projectId={project.id}
+              months={sentinelMonths}
+              lossYears={series?.loss ?? []}
+              monthlyCompositeEnabled={dataSource() === "live"}
+            />
             <p className="mt-2 text-xs text-muted-foreground">
-              Contorno del proyecto sobre imágenes satelitales (puede estar simplificado para el mapa).
+              El fondo es cartografía de Esri. La capa NDVI mensual o la pérdida forestal anual solo se solicita al
+              pulsar el botón de carga. El contorno puede estar simplificado.
             </p>
           </div>
         ) : (

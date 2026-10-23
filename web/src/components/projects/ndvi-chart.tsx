@@ -65,7 +65,7 @@ export function NdviChart({ points, t0 }: { points: NdviPoint[]; t0: string | nu
   return (
     <div role="img" aria-label={`Serie mensual de NDVI entre ${formatPeriod(first)} y ${formatPeriod(last)}, por sensor.`}>
       <ResponsiveContainer width="100%" height={280} initialDimension={{ width: 560, height: 280 }}>
-        <LineChart data={rows} margin={{ left: -20, right: 10, top: 10 }}>
+        <LineChart data={rows} margin={{ left: 10, right: 10, top: 10 }}>
           <CartesianGrid stroke="var(--border)" vertical={false} />
           <XAxis
             dataKey="period"
@@ -73,7 +73,11 @@ export function NdviChart({ points, t0 }: { points: NdviPoint[]; t0: string | nu
             tickFormatter={(value: string) => value.slice(0, 4)}
             tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
           />
-          <YAxis domain={[0.2, 1]} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
+          <YAxis
+            domain={[0.2, 1]}
+            tickFormatter={(value: number) => value.toFixed(1)}
+            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+          />
           <Tooltip
             labelFormatter={(label) => formatPeriod(String(label))}
             formatter={(value) => formatNumber(typeof value === "number" ? value : Number(value))}

@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from bosquevivo.db.models import Job, Project
+from bosquevivo.api.deps import get_satellite_provider
+from bosquevivo.core.config import Settings, get_settings
+from bosquevivo.db.models import ImageAsset, Job, Project
 from bosquevivo.satellite import SatelliteService, Sensor
 from bosquevivo.satellite.providers import FakeProvider
 
@@ -90,3 +92,87 @@ def test_geometry_and_series_endpoints(client, db, project):
     assert len(series["ndvi"]) == 6
     assert series["loss"] == [{"year": 2021, "ha_lost": 2.0}]
     assert client.get("/api/v1/projects/999/series").status_code == 404
+
+
+def test_monthly_thumbnail_is_available_for_a_stored_sentinel_month(client, db, project, tmp_path):
+    provider = FakeProvider()
+    client.app.dependency_overrides[get_satellite_provider] = lambda: provider
+    client.app.dependency_overrides[get_settings] = lambda: Settings(
+        admin_token="secreto", data_dir=tmp_path
+    )
+    response = client.get(f"/api/v1/projects/{project.id}/thumbnail?month=2020-01-01")
+    assert response.status_code == 404
+
+    satellite = SatelliteService(db, provider, tmp_path / "images")
+    satellite.refresh_timeseries(
+        project.id, date(2020, 1, 1), date(2020, 1, 31), sensors=(Sensor.SENTINEL2,)
+    )
+    db.commit()
+
+    response = client.get(f"/api/v1/projects/{project.id}/thumbnail?month=2020-01-01")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["x-image-bounds"] == "-75.0,5.0,-74.9,5.1"
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_monthly_ndvi_thumbnail_is_available_for_a_stored_sentinel_month(
+    client, db, project, tmp_path
+):
+    provider = FakeProvider()
+    client.app.dependency_overrides[get_satellite_provider] = lambda: provider
+    client.app.dependency_overrides[get_settings] = lambda: Settings(
+        admin_token="secreto", data_dir=tmp_path
+    )
+    SatelliteService(db, provider, tmp_path / "images").refresh_timeseries(
+        project.id, date(2020, 1, 1), date(2020, 1, 31), sensors=(Sensor.SENTINEL2,)
+    )
+    db.commit()
+
+    response = client.get(
+        f"/api/v1/projects/{project.id}/thumbnail",
+        params={"month": "2020-01-01", "kind": "ndvi"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    asset = db.query(ImageAsset).one()
+    assert asset.kind == "ndvi"
+
+
+def test_monthly_thumbnail_rejects_non_first_day(client, project):
+    assert (
+        client.get(f"/api/v1/projects/{project.id}/thumbnail?month=2020-01-02").status_code
+        == 422
+    )
+
+
+def test_annual_loss_thumbnail_is_available_for_a_stored_loss_year(
+    client, db, project, tmp_path
+):
+    provider = FakeProvider(loss_by_year={2021: 2.0})
+    client.app.dependency_overrides[get_satellite_provider] = lambda: provider
+    client.app.dependency_overrides[get_settings] = lambda: Settings(
+        admin_token="secreto", data_dir=tmp_path
+    )
+    SatelliteService(db, provider, tmp_path / "images").refresh_forest_loss(project.id)
+    db.commit()
+
+    response = client.get(
+        f"/api/v1/projects/{project.id}/thumbnail",
+        params={"year": 2021, "kind": "loss"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["x-image-bounds"] == "-75.0,5.0,-74.9,5.1"
+    asset = db.query(ImageAsset).one()
+    assert asset.kind == "loss"
+
+
+def test_annual_loss_thumbnail_requires_a_stored_loss_year(client, project):
+    response = client.get(
+        f"/api/v1/projects/{project.id}/thumbnail",
+        params={"year": 2021, "kind": "loss"},
+    )
+    assert response.status_code == 404

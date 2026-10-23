@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     gemini_model: str = ""
     gemini_model_light: str = ""
     gee_project: str = ""
+    google_application_credentials: str = ""
     satellite_provider: str = "gee"
     # versión del índice con la que se calculan las auditorías nuevas (v0 sigue disponible)
     index_version: str = "v1"

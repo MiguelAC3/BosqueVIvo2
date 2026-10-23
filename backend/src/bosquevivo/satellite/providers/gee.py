@@ -1,5 +1,6 @@
 import json
 from datetime import date
+from pathlib import Path
 
 import ee
 import httpx
@@ -54,9 +55,9 @@ def point_from_properties(props: dict, sensor: Sensor) -> TimeSeriesPoint | None
     return TimeSeriesPoint(
         period=date.fromisoformat(str(props["period"])[:10]),
         sensor=sensor,
-        ndvi_mean=props.get("mean"),
-        ndvi_p10=props.get("p10"),
-        ndvi_p90=props.get("p90"),
+        ndvi_mean=props.get("mean") if valid else None,
+        ndvi_p10=props.get("p10") if valid else None,
+        ndvi_p90=props.get("p90") if valid else None,
         valid_fraction=min(1.0, valid / total) if total else 0.0,
         scene_count=count,
     )
@@ -74,16 +75,39 @@ def _info(value) -> dict:
     return value.getInfo() or {}
 
 
+def _advance_date(ee, value, delta, unit):
+    return ee.Date(ee.Date(value).advance(delta, unit))
+
+
 class GeeProvider:
     name = "gee"
 
-    def __init__(self, project: str) -> None:
+    def __init__(self, project: str, credentials_path: str = "") -> None:
         if not project:
             raise ExternalServiceError("GEE_PROJECT no está configurado")
         self._ee = ee
         try:
-            ee.Initialize(project=project)
+            if credentials_path:
+                key_file = Path(credentials_path)
+                if not key_file.is_file():
+                    raise ExternalServiceError(
+                        f"no se encontró el archivo de credenciales de Earth Engine: {key_file}"
+                    )
+                key_data = json.loads(key_file.read_text(encoding="utf-8"))
+                service_account = key_data.get("client_email")
+                if not service_account:
+                    raise ExternalServiceError(
+                        "el JSON de credenciales no contiene client_email"
+                    )
+                credentials = ee.ServiceAccountCredentials(
+                    service_account, key_file=str(key_file)
+                )
+                ee.Initialize(credentials, project=project)
+            else:
+                ee.Initialize(project=project)
         except Exception as exc:
+            if isinstance(exc, ExternalServiceError):
+                raise
             raise ExternalServiceError(f"no se pudo iniciar Earth Engine: {exc}") from exc
 
     def _region(self, geometry: dict):
@@ -151,9 +175,10 @@ class GeeProvider:
             chunk = months[offset : offset + BATCH_MONTHS]
             origin = ee.Date(chunk[0].isoformat())
 
-            def per_month(index, origin=origin):
-                first_day = origin.advance(ee.Number(index), "month")
-                monthly = collection.filterDate(first_day, first_day.advance(1, "month"))
+            def per_month(index):
+                first_day = _advance_date(ee, origin, ee.Number(index), "month")
+                next_day = _advance_date(ee, first_day, 1, "month")
+                monthly = collection.filterDate(first_day, next_day)
                 count = monthly.size()
                 composite = monthly.map(
                     lambda img: img.select("ndvi").updateMask(img.select("valid"))
@@ -183,10 +208,10 @@ class GeeProvider:
                     {
                         "period": first_day.format("YYYY-MM-dd"),
                         "count": count,
-                        "mean": stats.get("ndvi_mean"),
-                        "p10": stats.get("ndvi_p10"),
-                        "p90": stats.get("ndvi_p90"),
-                        "valid": stats.get("ndvi_count"),
+                        "mean": stats.get("ndvi_mean", 0),
+                        "p10": stats.get("ndvi_p10", 0),
+                        "p90": stats.get("ndvi_p90", 0),
+                        "valid": stats.get("ndvi_count", 0),
                         "total": first_scene_pixels,
                     },
                 )
@@ -309,6 +334,38 @@ class GeeProvider:
     ) -> bytes:
         ee = self._ee
         region = self._region(geometry)
+        if kind == ThumbnailKind.NDVI:
+            collection = self._s2_collection(region, start, end).map(
+                lambda image: image.select("ndvi").updateMask(image.select("valid"))
+            )
+            image = collection.median().clip(region).visualize(
+                min=-1,
+                max=1,
+                palette=["#8c510a", "#d8b365", "#f6e8c3", "#a6d96a", "#1a9641", "#00441b"],
+            )
+            url = image.getThumbURL({"region": region, "dimensions": 512, "format": "png"})
+            response = httpx.get(url, timeout=120)
+            if response.status_code != 200:
+                raise ExternalServiceError(f"error al obtener la miniatura: {response.status_code}")
+            return response.content
+
+        if kind == ThumbnailKind.LOSS:
+            hansen = self._ee.Image(HANSEN_DATASET)
+            forest = hansen.select("treecover2000").gte(TREE_COVER_THRESHOLD)
+            loss = (
+                hansen.select("lossyear")
+                .eq(start.year - 2000)
+                .And(forest)
+                .selfMask()
+                .clip(region)
+            )
+            image = loss.visualize(min=0, max=1, palette=["#e31a1c"])
+            url = image.getThumbURL({"region": region, "dimensions": 512, "format": "png"})
+            response = httpx.get(url, timeout=120)
+            if response.status_code != 200:
+                raise ExternalServiceError(f"error al obtener la miniatura: {response.status_code}")
+            return response.content
+
         s2 = (
             ee.ImageCollection(SENTINEL2_COLLECTION)
             .filterBounds(region)
@@ -316,15 +373,12 @@ class GeeProvider:
             .linkCollection(ee.ImageCollection(CLOUD_SCORE_COLLECTION), ["cs_cdf"])
             .map(lambda img: img.updateMask(img.select("cs_cdf").gte(CLOUD_SCORE_THRESHOLD)))
             .median()
+            .clip(region)
         )
         if kind == ThumbnailKind.NATURAL:
             image = s2.visualize(bands=["B4", "B3", "B2"], min=0, max=3000)
-        elif kind == ThumbnailKind.FALSE_COLOR:
-            image = s2.visualize(bands=["B8", "B4", "B3"], min=0, max=4000)
         else:
-            image = s2.normalizedDifference(["B8", "B4"]).visualize(
-                min=0, max=1, palette=["#8c510a", "#f6e8c3", "#a6d96a", "#1a9641", "#00441b"]
-            )
+            image = s2.visualize(bands=["B8", "B4", "B3"], min=0, max=4000)
         url = image.getThumbURL({"region": region, "dimensions": 512, "format": "png"})
         response = httpx.get(url, timeout=120)
         if response.status_code != 200:

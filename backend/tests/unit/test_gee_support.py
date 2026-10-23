@@ -3,7 +3,31 @@ from datetime import date
 import pytest
 
 from bosquevivo.satellite.models import Sensor
-from bosquevivo.satellite.providers.gee import month_starts, point_from_properties
+from bosquevivo.satellite.providers.gee import (
+    _advance_date,
+    month_starts,
+    point_from_properties,
+)
+
+
+def test_advance_date_casts_computed_object_to_ee_date():
+    class ComputedObject:
+        pass
+
+    class FakeDate:
+        def __init__(self, value):
+            self.value = value
+
+        def advance(self, delta, unit):
+            return ComputedObject()
+
+    class FakeEarthEngine:
+        Date = FakeDate
+
+    result = _advance_date(FakeEarthEngine, FakeDate("2024-01-01"), 1, "month")
+
+    assert isinstance(result, FakeDate)
+    assert isinstance(result.value, ComputedObject)
 
 
 def test_month_starts_cubre_cada_mes_hasta_antes_del_final():
@@ -65,6 +89,27 @@ def test_la_fraccion_valida_nunca_pasa_de_uno_ni_divide_por_cero():
 
     assert over is not None and over.valid_fraction == 1.0
     assert nothing is not None and nothing.valid_fraction == 0.0 and nothing.ndvi_mean is None
+
+
+def test_mes_sin_pixeles_ndvi_validos_no_convierte_valores_por_defecto_en_cero():
+    point = point_from_properties(
+        {
+            "period": "2019-03-01",
+            "count": 2,
+            "mean": 0,
+            "p10": 0,
+            "p90": 0,
+            "valid": 0,
+            "total": 100,
+        },
+        Sensor.SENTINEL2,
+    )
+
+    assert point is not None
+    assert point.ndvi_mean is None
+    assert point.ndvi_p10 is None
+    assert point.ndvi_p90 is None
+    assert point.valid_fraction == 0.0
 
 
 def test_acepta_fechas_con_hora():

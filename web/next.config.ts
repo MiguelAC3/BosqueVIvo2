@@ -9,6 +9,7 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   cacheComponents: true,
+  allowedDevOrigins: ["127.0.0.1"],
   // La copia de datos se lee con rutas dinámicas: hay que pedir que viaje con la función.
   outputFileTracingIncludes: { "/**": ["./snapshot/**/*"] },
   partialPrefetching: true,

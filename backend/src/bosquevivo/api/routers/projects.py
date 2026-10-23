@@ -1,18 +1,24 @@
 import json
 from dataclasses import asdict
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from shapely.geometry import mapping, shape
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from bosquevivo.api.deps import db_session
+from bosquevivo.api.deps import db_session, get_satellite_provider
 from bosquevivo.api.schemas import DeclarationOut, LossOut, ProjectOut, SeriesOut, SeriesPointOut
 from bosquevivo.audit.compare import compare_declared_observed
 from bosquevivo.audit.service import AuditService
-from bosquevivo.db.models import ForestLoss, NdviObservation, ProjectDeclaration
+from bosquevivo.core.config import get_settings
+from bosquevivo.db.models import ForestLoss, NdviObservation, Project, ProjectDeclaration
 from bosquevivo.registry.geometry import simplify_geometry
 from bosquevivo.registry.repository import ProjectRepository
+from bosquevivo.satellite.models import Sensor, ThumbnailKind
+from bosquevivo.satellite.provider import SatelliteProvider
+from bosquevivo.satellite.service import SatelliteService
 
 router = APIRouter(prefix="/api/v1/projects", tags=["proyectos"])
 
@@ -102,6 +108,72 @@ def get_geometry(
         "properties": {"id": project.id, "name": project.name},
         "geometry": geometry,
     }
+
+
+@router.get("/{project_id}/thumbnail")
+def get_monthly_thumbnail(
+    project_id: int,
+    month: date | None = None,
+    kind: ThumbnailKind = Query(default=ThumbnailKind.NATURAL),
+    year: int | None = Query(default=None, ge=2001, le=2024),
+    session: Session = Depends(db_session),
+    provider: SatelliteProvider | None = Depends(get_satellite_provider),
+):
+    """Devuelve una capa mensual Sentinel-2 o la pérdida Hansen de un año."""
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="proyecto no encontrado")
+    if kind == ThumbnailKind.LOSS:
+        if year is None or month is not None:
+            raise HTTPException(status_code=422, detail="kind=loss requiere year y no acepta month")
+        exists = session.scalar(
+            select(ForestLoss.id).where(
+                ForestLoss.project_id == project_id,
+                ForestLoss.year == year,
+            )
+        )
+        if exists is None:
+            raise HTTPException(status_code=404, detail="no hay pérdida Hansen para ese año")
+        start = date(year, 1, 1)
+        end = date(year + 1, 1, 1)
+    else:
+        if month is None or year is not None:
+            raise HTTPException(status_code=422, detail="month es obligatorio para esta visualización")
+        if month.day != 1:
+            raise HTTPException(status_code=422, detail="month debe ser el primer día del mes")
+        observation = session.scalar(
+            select(NdviObservation.id).where(
+                NdviObservation.project_id == project_id,
+                NdviObservation.period == month,
+                NdviObservation.sensor == Sensor.SENTINEL2.value,
+            )
+        )
+        if observation is None:
+            raise HTTPException(
+                status_code=404, detail="no hay observación Sentinel-2 para ese mes"
+            )
+        start = month
+        end = date(month.year + (month.month == 12), month.month % 12 + 1, 1)
+
+    if provider is None:
+        raise HTTPException(status_code=503, detail="el proveedor satelital no está disponible")
+
+    asset = SatelliteService(session, provider, get_settings().images_dir).thumbnail(
+        project_id,
+        start,
+        end,
+        kind=kind,
+        sensor=Sensor.SENTINEL2,
+    )
+    min_x, min_y, max_x, max_y = shape(json.loads(project.geometry)).bounds
+    return FileResponse(
+        asset.path,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "X-Image-Bounds": f"{min_x},{min_y},{max_x},{max_y}",
+        },
+    )
 
 
 @router.get("/{project_id}/series", response_model=SeriesOut)
