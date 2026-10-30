@@ -69,6 +69,8 @@ SATELLITE_PROVIDER=hansen uv run bosquevivo audit-batch --country Colombia
 
 `audit` con `SATELLITE_PROVIDER=gee` (NDVI completo y miniaturas) necesita `GEE_PROJECT` y haber ejecutado `earthengine authenticate`. Para un tipo de archivo distinto use `bosquevivo import <archivo> --source <nombre>`.
 
+En el detalle de un proyecto, el mapa permite elegir un mes y una visualización (NDVI o color natural), o un año para ver píxeles de pérdida forestal Hansen. Cada imagen se solicita únicamente al pulsar el botón: `GET /api/v1/projects/{id}/thumbnail?month=AAAA-MM-01&kind=ndvi` (o `kind=natural`) y `GET /api/v1/projects/{id}/thumbnail?year=AAAA&kind=loss`. El backend solo genera imágenes mensuales para meses Sentinel-2 con observaciones guardadas y capas Hansen para años con pérdidas registradas. Las imágenes se recortan al polígono y se cachean para reutilizarse.
+
 Calidad:
 
 ```

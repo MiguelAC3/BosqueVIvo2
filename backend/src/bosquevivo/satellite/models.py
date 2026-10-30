@@ -14,6 +14,7 @@ class ThumbnailKind(StrEnum):
     NATURAL = "natural"
     FALSE_COLOR = "false_color"
     NDVI = "ndvi"
+    LOSS = "loss"
 
 
 class TimeSeriesPoint(BaseModel):
