@@ -2,6 +2,10 @@ from bosquevivo.ai.agent.evidence import EvidenceItem
 
 MAX_COMMUNITY_CHARS = 300
 HUMAN_CONTACT = "Si quiere, una persona del equipo puede ayudarle."
+BUSY = (
+    "En este momento hay muchas consultas y no pude analizar su pregunta. "
+    "Intente de nuevo en un par de minutos."
+)
 
 
 def _audit_item(items: list[EvidenceItem]) -> EvidenceItem | None:
@@ -26,6 +30,8 @@ def fallback_answer(items: list[EvidenceItem], role: str, reason: str = "") -> s
             "Todavía no hay datos suficientes para concluir sobre ese proyecto. "
             "Puede deberse a nubes o a series cortas."
         )
+    elif reason == "cuota":
+        text = BUSY
     else:
         text = (
             "No puedo responder con seguridad en este momento porque no tengo datos "

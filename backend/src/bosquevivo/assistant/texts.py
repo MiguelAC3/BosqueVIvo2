@@ -19,4 +19,5 @@ MEDIA_GRANTED = "Listo, ya puedo usar sus fotos y audios. Envíelos cuando quier
 DELETED = "Listo. Borré sus datos, consultas y permisos. Si me escribe de nuevo empezamos de cero."
 UNSUPPORTED = "Por ahora solo entiendo texto, ubicación, fotos y notas de voz."
 FAILURE = "Tuve un problema para responder. Intente de nuevo en unos minutos."
+WORKING = "Estoy revisando los datos y las imágenes del satélite. Puede tardar unos minutos."
 AUDIO_UNCLEAR = "No pude entender el audio. ¿Puede escribirme su pregunta?"

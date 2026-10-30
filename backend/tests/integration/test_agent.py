@@ -74,7 +74,7 @@ def test_trace_is_persisted(db, seeded):
     agent, _ = make_agent(db, script)
     answer = agent.answer(AgentRequest(text="estado", user_ref="u1"))
     run = db.get(AgentRun, answer.run_id)
-    assert run is not None and run.prompt_version == "v1" and run.latency_ms is not None
+    assert run is not None and run.prompt_version == "v2" and run.latency_ms is not None
     steps = db.query(AgentStep).filter_by(run_id=run.id).all()
     assert [s.tool for s in steps] == ["obtener_auditoria"]
     assert steps[0].evidence_ids

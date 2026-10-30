@@ -80,6 +80,29 @@ class Agent:
         )
         return (used or 0) >= self.settings.agent_daily_limit_per_user
 
+    def _history(self, run: AgentRun) -> list[Message]:
+        """Turnos recientes y validados de la misma persona, para entender preguntas de
+        seguimiento. Las cifras siguen exigiendo evidencias de la consulta actual."""
+        if not run.user_ref or self.settings.agent_history_turns <= 0:
+            return []
+        since = datetime.now(UTC) - timedelta(minutes=self.settings.agent_history_minutes)
+        previous = self.session.scalars(
+            select(AgentRun)
+            .where(
+                AgentRun.user_ref == run.user_ref,
+                AgentRun.id != run.id,
+                AgentRun.created_at >= since,
+                AgentRun.validator_passed.is_(True),
+            )
+            .order_by(AgentRun.id.desc())
+            .limit(self.settings.agent_history_turns)
+        ).all()
+        messages: list[Message] = []
+        for turn in reversed(previous):
+            messages.append(Message(role="user", text=wrap_untrusted(turn.query, "mensaje_previo")))
+            messages.append(Message(role="model", text=turn.answer or ""))
+        return messages
+
     def _envelope(self, request: AgentRequest) -> str:
         text = wrap_untrusted(request.text, "mensaje_usuario")
         if scan_for_injection(request.text).suspicious:
@@ -120,13 +143,20 @@ class Agent:
             user_media=request.media,
             media_consent=request.media_consent,
         )
+        reason = ""
         try:
             text, tools_called, passed = self._loop(run, request, ctx)
-        except (QuotaExceededError, ExternalServiceError) as exc:
+        except QuotaExceededError as exc:
+            log.warning("agent_degraded", error=str(exc))
+            text, tools_called, passed, reason = None, [], None, "cuota"
+        except ExternalServiceError as exc:
             log.warning("agent_degraded", error=str(exc))
             text, tools_called, passed = None, [], None
+        except Exception as exc:  # fallo interno o de red no previsto: se responde con respaldo
+            log.error("agent_failed", error=repr(exc))
+            text, tools_called, passed = None, [], None
         if text is None or passed is False:
-            fallback = fallback_answer(evidence.items, request.role)
+            fallback = fallback_answer(evidence.items, request.role, reason)
             return self._finish(
                 run,
                 fallback,
@@ -150,7 +180,10 @@ class Agent:
         self, run: AgentRun, request: AgentRequest, ctx: ToolContext
     ) -> tuple[str | None, list[str], bool | None]:
         system = system_prompt(request.role)
-        messages = [Message(role="user", text=self._envelope(request), media=list(request.media))]
+        messages = [
+            *self._history(run),
+            Message(role="user", text=self._envelope(request), media=list(request.media)),
+        ]
         tools = self.registry.specs(request.role)
         called: list[str] = []
         seen_calls: set[tuple[str, str]] = set()
@@ -231,6 +264,12 @@ class Agent:
         except ToolError as exc:
             step.error = str(exc)
             result = ToolResult(call.name, {"error": str(exc)})
+        except QuotaExceededError:
+            raise
+        except ExternalServiceError as exc:
+            # un servicio externo caído (satélite, visión) no tumba la consulta completa
+            step.error = str(exc)
+            result = ToolResult(call.name, {"error": "servicio externo no disponible ahora"})
         step.latency_ms = int((time.monotonic() - started) * 1000)
         self.session.add(step)
         return result

@@ -1,3 +1,4 @@
+import re
 import time
 from typing import Any
 
@@ -14,6 +15,15 @@ from bosquevivo.core.logging import get_logger
 log = get_logger(__name__)
 
 RETRYABLE = {429, 500, 502, 503, 504}
+MAX_RETRY_DELAY = 60.0
+# El 429 de Gemini indica cuánto esperar, p. ej. "retryDelay": "17s"
+RETRY_DELAY = re.compile(r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s")
+
+
+def retry_delay(exc: Exception, attempt: int) -> float:
+    match = RETRY_DELAY.search(f"{getattr(exc, 'details', '')} {exc}")
+    delay = float(match.group(1)) if match else float(2**attempt)
+    return min(delay, MAX_RETRY_DELAY)
 
 
 def _to_contents(messages: list[Message]) -> list[Any]:
@@ -126,7 +136,7 @@ class GeminiProvider:
             except errors.APIError as exc:
                 code = getattr(exc, "code", 0)
                 if code in RETRYABLE and attempt < self.max_retries:
-                    delay = 2**attempt
+                    delay = retry_delay(exc, attempt)
                     log.warning("gemini_retry", code=code, attempt=attempt, delay=delay)
                     self.sleep(delay)
                     continue

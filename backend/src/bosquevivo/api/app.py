@@ -5,11 +5,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from bosquevivo import __version__
+from bosquevivo.ai.knowledge import KnowledgeBase
 from bosquevivo.api.routers import admin, audits, chat, health, projects, whatsapp
 from bosquevivo.core.config import get_settings
 from bosquevivo.core.errors import ExternalServiceError, NotFoundError, ValidationFailedError
 from bosquevivo.core.logging import configure_logging, get_logger
-from bosquevivo.db.session import get_engine, init_db, make_session_factory
+from bosquevivo.db.session import get_engine, get_session, init_db, make_session_factory
 from bosquevivo.jobs import JobWorker
 from bosquevivo.jobs.kinds import CALCULATE_AUDIT, GENERATE_REPORT, WHATSAPP_MESSAGE
 from bosquevivo.jobs.tasks import (
@@ -26,6 +27,9 @@ log = get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     init_db()
+    with get_session() as session:
+        # el corpus es pequeño: se recarga en cada arranque para seguir los cambios del repo
+        log.info("knowledge_loaded", chunks=KnowledgeBase(session).load_directory())
     worker = JobWorker(make_session_factory(get_engine()))
     worker.register(GENERATE_REPORT, generate_report)
     provider = None

@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = ""
     gemini_model_light: str = ""
+    # cuota de la capa gratuita (verificar en AI Studio) y espera máxima por un cupo libre
+    gemini_requests_per_minute: int = 10
+    gemini_requests_per_day: int = 400
+    gemini_max_wait_seconds: float = 30.0
     gee_project: str = ""
     google_application_credentials: str = ""
     satellite_provider: str = "gee"
@@ -27,6 +31,9 @@ class Settings(BaseSettings):
     admin_token: str = ""
     agent_max_steps: int = 5
     agent_daily_limit_per_user: int = 30
+    # memoria de conversación: turnos previos que se envían al modelo y su vigencia
+    agent_history_turns: int = 3
+    agent_history_minutes: int = 30
 
     @property
     def images_dir(self) -> Path:

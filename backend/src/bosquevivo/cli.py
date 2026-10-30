@@ -6,6 +6,7 @@ from pathlib import Path
 
 from bosquevivo.ai.agent import Agent, default_registry
 from bosquevivo.ai.eval import EvalRunner, load_cases
+from bosquevivo.ai.knowledge import KnowledgeBase
 from bosquevivo.assistant.runtime import build_llm
 from bosquevivo.core.config import get_settings
 from bosquevivo.core.logging import configure_logging
@@ -220,6 +221,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
     settings = get_settings()
     llm = build_llm(settings)
     with get_session() as session:
+        KnowledgeBase(session).load_directory()
         agent = Agent(session, llm, default_registry(), settings)
         report = EvalRunner(session, agent).run(load_cases())
         output = Path(args.output)
