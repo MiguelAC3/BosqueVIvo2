@@ -10,8 +10,20 @@ from bosquevivo.core.config import Settings
 from bosquevivo.satellite.provider import SatelliteProvider
 from bosquevivo.satellite.service import SatelliteService
 
-REQUESTS_PER_MINUTE = 10
-REQUESTS_PER_DAY = 400
+_shared_limiter: RateLimiter | None = None
+
+
+def shared_limiter(settings: Settings) -> RateLimiter:
+    """Un solo contador por proceso: el chat del panel y cada mensaje de WhatsApp comparten
+    la cuota del modelo."""
+    global _shared_limiter  # noqa: PLW0603
+    if _shared_limiter is None:
+        _shared_limiter = RateLimiter(
+            settings.gemini_requests_per_minute,
+            settings.gemini_requests_per_day,
+            max_wait=settings.gemini_max_wait_seconds,
+        )
+    return _shared_limiter
 
 
 def build_llm(settings: Settings) -> LLMProvider:
@@ -19,7 +31,7 @@ def build_llm(settings: Settings) -> LLMProvider:
         settings.gemini_api_key,
         settings.gemini_model,
         light_model=settings.gemini_model_light or None,
-        limiter=RateLimiter(REQUESTS_PER_MINUTE, REQUESTS_PER_DAY),
+        limiter=shared_limiter(settings),
         cache=ResponseCache(settings.cache_dir / "llm"),
     )
 

@@ -2,6 +2,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from bosquevivo.ai.agent import Agent, AgentRequest
+from bosquevivo.ai.agent.router import classify_query
 from bosquevivo.ai.llm import LLMProvider, MediaPart
 from bosquevivo.assistant import texts
 from bosquevivo.assistant.client import WhatsAppClient
@@ -11,13 +12,15 @@ from bosquevivo.assistant.dialogue import (
     wants_deletion,
     wants_media_consent,
 )
+from bosquevivo.assistant.media import strip_metadata
 from bosquevivo.assistant.messages import IncomingMessage
 from bosquevivo.assistant.voice import transcribe_audio
 from bosquevivo.core.config import Settings
 from bosquevivo.core.errors import ExternalServiceError
 from bosquevivo.core.logging import get_logger
 from bosquevivo.core.privacy import phone_hmac
-from bosquevivo.db.models import AgentRun, ConsentLog, Evidence, ProcessedMessage, WaUser
+from bosquevivo.db.models import AgentRun, ConsentLog, Evidence, Job, ProcessedMessage, WaUser
+from bosquevivo.jobs.kinds import WHATSAPP_MESSAGE
 
 log = get_logger(__name__)
 
@@ -88,10 +91,21 @@ class AssistantService:
                 delete(Evidence).where(Evidence.id.like(f"r{run_id}\\_%", escape="\\"))
             )
         self.session.execute(delete(AgentRun).where(AgentRun.user_ref == digest))
+        self._delete_pending_messages(phone)
         user = self.session.scalars(select(WaUser).where(WaUser.phone_hmac == digest)).first()
         if user:
             self.session.delete(user)
         self.session.flush()
+
+    def _delete_pending_messages(self, phone: str) -> None:
+        """Mensajes de la persona que siguen en la cola con su teléfono. El que se está
+        procesando (running) se limpia al terminar (`jobs.queue.scrub`)."""
+        jobs = self.session.scalars(
+            select(Job).where(Job.kind == WHATSAPP_MESSAGE, Job.status != "running")
+        ).all()
+        for job in jobs:
+            if job.payload.get("phone") == phone:
+                self.session.delete(job)
 
     def handle(self, message: IncomingMessage) -> None:
         if not self.mark_processed(message.message_id):
@@ -137,6 +151,8 @@ class AssistantService:
         if request is None:
             self._reply(phone, texts.AUDIO_UNCLEAR)
             return
+        if classify_query(request.text, bool(request.media)) == "profunda":
+            self._reply(phone, texts.WORKING)  # acuse inmediato de la consulta profunda (ADR 0010)
         answer = self.agent.answer(request)
         self._reply(phone, answer.text)
 
@@ -146,8 +162,12 @@ class AssistantService:
         text = message.text or ""
         location = None
         media: list[MediaPart] = []
-        if message.kind == "location" and message.latitude is not None:
-            location = (float(message.latitude), float(message.longitude or 0.0))
+        if (
+            message.kind == "location"
+            and message.latitude is not None
+            and message.longitude is not None
+        ):
+            location = (float(message.latitude), float(message.longitude))
             text = text or "¿Qué hay en este lugar?"
         if message.kind == "audio" and message.media_id:
             data, mime = self.client.download_media(message.media_id)
@@ -156,8 +176,8 @@ class AssistantService:
                 return None
             text = transcript
         if message.kind == "image" and message.media_id:
-            data, mime = self.client.download_media(message.media_id)
-            media = [MediaPart(data, mime)]
+            data, _ = self.client.download_media(message.media_id)
+            media = [MediaPart(*strip_metadata(data))]
             text = text or "Mire esta foto"
         return AgentRequest(
             text=text,

@@ -6,6 +6,13 @@ from sqlalchemy.orm import Session
 from bosquevivo.db.models import Job
 
 MAX_ATTEMPTS = 3
+# Datos personales que solo se necesitan mientras el trabajo está pendiente (Ley 1581).
+SENSITIVE_FIELDS = ("phone", "text")
+
+
+def scrub(job: Job) -> None:
+    if any(name in job.payload for name in SENSITIVE_FIELDS):
+        job.payload = {k: v for k, v in job.payload.items() if k not in SENSITIVE_FIELDS}
 
 
 class JobQueue:
@@ -33,11 +40,14 @@ class JobQueue:
         job.status = "done"
         job.result = result
         job.error = None
+        scrub(job)
         self.session.flush()
 
     def fail(self, job: Job, error: str) -> None:
         job.error = error
         job.status = "queued" if job.attempts < MAX_ATTEMPTS else "failed"
+        if job.status == "failed":
+            scrub(job)
         self.session.flush()
 
     def get(self, job_id: int) -> Job | None:
